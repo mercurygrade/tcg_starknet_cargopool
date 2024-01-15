@@ -1,5 +1,4 @@
 target
 .env
 node_modules
-src/counter.cairo
 .snfoundry_cache
