@@ -34,6 +34,8 @@ trait ICargoListing<TContractState> {
     fn add_cargo(ref self : TContractState, weight: u32, size: u32, destination: u64);
     fn update_cargo(ref self : TContractState, listing_id: u32, weight: u32, size: u3, destination: u64, status: CargoStatus);
     fn remove_cargo(ref self : TContractState, listing_id: u32);
+    fn transfer_cargo_ownership(ref self : TContractState, listing_id: u32, new_owner: ContractAddress);
+    fn get_owner(self : @TContractState, listing_id: u32) -> ContractAddress;
 }
 
 // this is the implementation of the interface
@@ -52,6 +54,12 @@ mod CargoListing {
     #[constructor]
     fn constructor(ref self : ContractState) {
         self.next_cargo_id.write(1);
+    }
+
+    #[event]
+    #[derive(Drop, starknet::Event)]
+    enum Event {
+      OwnershipTransferred1: OwnershipTransferred1,
     }
 
     #[abi(embed_v0)]
@@ -98,7 +106,7 @@ mod CargoListing {
 
         // this function will remove the cargo from the list 
         // we do not actually remove the cargo from the list, we just change the status to unavailable
-        fn remove_cargo(ref self : ContractState, listing_id: u32) {
+        fn remove_cargo(ref self : ContractState, listing_id: u32) -> String {
             let caller = get_caller_address();
             let cargo = self.cargo_listing.read(listing_id);
             if cargo.owner!= caller {
@@ -114,6 +122,37 @@ mod CargoListing {
                 status: CargoStatus::Unavailable,
             };
             self.cargo_listing.write(cargo.id, cargo);
+            return "Cargo removed successfully!".to_string();
+        }
+
+        // this function will transfer the ownership of the cargo to the new owner
+        // the caller should be the new owner
+        // this method can be usefull if we want to transfer it to another user for example on accepting delivery on driver side
+        fn transfer_cargo_ownership(ref self : ContractState, listing_id: u32, new_owner: ContractAddress) {
+            let caller = get_caller_address();
+            let cargo = self.cargo_listing.read(listing_id);
+            // check if the caller is the new owner
+            if cargo.owner!= caller {
+                return "Operation not allowed. Illegal!".to_string();
+            }
+            // change the owner of the cargo to the new owner
+            let cargo = Cargo {
+                id: cargo.id,
+                weight: cargo.weight,
+                size: cargo.size,
+                destination: cargo.destination,
+                owner: new_owner,
+                status: cargo.status,
+            };
+            self.cargo_listing.write(cargo.id, cargo);
+        }
+    }
+
+    #[generate_trait]
+    impl PrivateMethods of PrivateMethodsTrait {
+        fn only_owner(self: @ContractState) {
+            let caller = get_caller_address();
+            assert(caller == self.owner.read(), 'Caller is not the owner');
         }
     }
 }
