@@ -115,6 +115,5 @@ mod CargoListing {
             };
             self.cargo_listing.write(cargo.id, cargo);
         }
-
     }
 }
