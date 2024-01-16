@@ -32,7 +32,7 @@ enum CargoStatus {
 trait ICargoListing<TContractState> {
     fn get_cargo(self : @TContractState, listing_id: u32) -> Cargo;
     fn add_cargo(ref self : TContractState, weight: u32, size: u32, destination: u64);
-    fn update_cargo(ref self : TContractState, listing_id: u32, weight: u32, size: u3, destination: u64);
+    fn update_cargo(ref self : TContractState, listing_id: u32, weight: u32, size: u3, destination: u64, status: CargoStatus);
     fn remove_cargo(ref self : TContractState, listing_id: u32);
 }
 
@@ -72,13 +72,14 @@ mod CargoListing {
                 size: size,
                 destination: destination,
                 owner: caller,
+                status: CargoStatus::Available,
             };
             self.cargo_listing.write(cargo.id, cargo);
             self.next_cargo_id.write(id + 1);
         }
 
         // this function will update the cargo in the list
-        fn update_cargo(ref self : ContractState, listing_id: u32, weight: u32, size: u3, destination: u64) {
+        fn update_cargo(ref self : ContractState, listing_id: u32, weight: u32, size: u3, destination: u64, status: CargoStatus) {
             let caller = get_caller_address();
             let cargo = self.cargo_listing.read(listing_id);
             if cargo.owner!= caller {
@@ -90,12 +91,30 @@ mod CargoListing {
                 size: size,
                 destination: destination,
                 owner: caller,
+                status: status,
                 };
             self.cargo_listing.write(cargo.id, cargo);
         }
 
-        // this function will remove the cargo from the list
-
+        // this function will remove the cargo from the list 
+        // we do not actually remove the cargo from the list, we just change the status to unavailable
+        fn remove_cargo(ref self : ContractState, listing_id: u32) {
+            let caller = get_caller_address();
+            let cargo = self.cargo_listing.read(listing_id);
+            if cargo.owner!= caller {
+                return;
+            }
+            // change cargo avalability to unavailable
+            let cargo = Cargo {
+                id: cargo.id,
+                weight: cargo.weight,
+                size: cargo.size,
+                destination: cargo.destination,
+                owner: caller,
+                status: CargoStatus::Unavailable,
+            };
+            self.cargo_listing.write(cargo.id, cargo);
+        }
 
     }
 }
