@@ -1,24 +1,45 @@
 use starknet::ContractAddress;
 
+// this is the interface that will be used in the contract
+#[starknet::interface]
+trait ICargoListing<TContractState> {
+    fn get_cargo(self : @TContractState, listing_id: u32) -> Cargo;
+    fn add_cargo(ref self : TContractState, weight: felt252, size: felt252, destination: Location, origin: Location);
+    fn update_cargo(ref self : TContractState, listing_id: u32, weight: felt252, size: felt252, destination: Location, origin: Location, status: CargoStatus);
+    fn remove_cargo(ref self : TContractState, listing_id: u32);
+    fn transfer_cargo_ownership(ref self : TContractState, listing_id: u32, new_owner: ContractAddress);
+    fn get_cargo_owner(self : @TContractState, listing_id: u32) -> ContractAddress;
+    fn get_owner(self : @TContractState) -> ContractAddress;
+    // fn get_cargo_count(self : @TContractState) -> u32;
+    // fn get_cargo_list(self : @TContractState, start: u32, end: u32) -> Vec<Cargo>;
+    // fn get_cargo_list_by_owner(self : @TContractState, owner: ContractAddress, start: u32, end: u32) -> Vec<Cargo>;
+    // fn get_cargo_list_by_status(self : @TContractState, status: CargoStatus, start: u32, end: u32) -> Vec<Cargo>;
+    // fn get_cargo_list_by_origin(self : @TContractState, origin: Location, start: u32, end: u32) -> Vec<Cargo>;
+    // fn get_cargo_list_by_destination(self : @TContractState, destination: Location, start: u32, end: u32) -> Vec<Cargo>;
+    // fn get_cargo_list_by_origin_and_destination(self : @TContractState, origin: Location, destination: Location, start: u32, end: u32) -> Vec<Cargo>;
+    }
+
 // this is the Cargo struct that will be stored in the contract
 #[derive(Drop, Serde, Copy, starknet::Store)]
 struct Cargo {
     id: u32,
-    weight: felt256,
-    size: felt256,
-    origin: location,
-    destination: location,
+    weight: felt252,
+    size: felt252,
+    destination: Location,
+    origin:Location,
     owner: ContractAddress,
     status: CargoStatus,
     }
 
-// this is the location struct that will be used in the contract
+// this is the Location struct that will be used in the contract
 #[derive(Drop, Serde, Copy, starknet::Store)]
-struct location {
-    latitude: felt256,
-    longitude: felt256,
+struct Location {
+    latitude: felt252,
+    longitude: felt252,
 }
 
+#[event]
+#[derive(Drop, starknet::Event)]
 enum CargoStatus {
         Available,
         Matched,
@@ -27,16 +48,12 @@ enum CargoStatus {
         Delivered,
     }
 
-// this is the interface that will be used in the contract
-#[starknet::interface]
-trait ICargoListing<TContractState> {
-    fn get_cargo(self : @TContractState, listing_id: u32) -> Cargo;
-    fn add_cargo(ref self : TContractState, weight: u32, size: u32, destination: u64);
-    fn update_cargo(ref self : TContractState, listing_id: u32, weight: u32, size: u3, destination: u64, status: CargoStatus);
-    fn remove_cargo(ref self : TContractState, listing_id: u32);
-    fn transfer_cargo_ownership(ref self : TContractState, listing_id: u32, new_owner: ContractAddress);
-    fn get_owner(self : @TContractState, listing_id: u32) -> ContractAddress;
+mod Errors {
+    const UNAUTHORIZED: felt252 = 'Not owner';
+    const ZERO_ADDRESS_OWNER: felt252 = 'Owner cannot be zero';
+    const ZERO_ADDRESS_CALLER: felt252 = 'Caller cannot be zero';
 }
+
 
 // this is the implementation of the interface
 #[starknet::contract]
@@ -44,6 +61,10 @@ mod CargoListing {
     use starknet::ContractAddress;
     use starknet::get_caller_address;
     use super::Cargo;
+    use super::Location;
+    use super::CargoStatus;
+    use super::Errors;
+
 
     #[storage]
     struct Storage {
@@ -56,12 +77,6 @@ mod CargoListing {
         self.next_cargo_id.write(1);
     }
 
-    #[event]
-    #[derive(Drop, starknet::Event)]
-    enum Event {
-      OwnershipTransferred1: OwnershipTransferred1,
-    }
-
     #[abi(embed_v0)]
     impl CargoListingImpl of super::ICargoListing<ContractState>{       
         
@@ -71,7 +86,7 @@ mod CargoListing {
         }
 
         // this function will add a new cargo to the list
-        fn add_cargo(ref self : ContractState, weight: u32, size: u32, destination: u64) {
+        fn add_cargo(ref self : ContractState, weight: felt252, size: felt252, destination: Location, origin: Location) {
             let caller = get_caller_address();
             let id = self.next_cargo_id.read();
             let cargo = Cargo {
@@ -79,6 +94,7 @@ mod CargoListing {
                 weight: weight,
                 size: size,
                 destination: destination,
+                origin: origin,
                 owner: caller,
                 status: CargoStatus::Available,
             };
@@ -87,17 +103,19 @@ mod CargoListing {
         }
 
         // this function will update the cargo in the list
-        fn update_cargo(ref self : ContractState, listing_id: u32, weight: u32, size: u3, destination: u64, status: CargoStatus) {
+        fn update_cargo(ref self : ContractState, listing_id:u32, weight: felt252, size: felt252, destination: Location, origin: Location, status: CargoStatus) {
             let caller = get_caller_address();
             let cargo = self.cargo_listing.read(listing_id);
-            if cargo.owner!= caller {
-                return;
-            }
+            // if cargo.owner!= caller {
+            //     return;
+            // }
+            assert(cargo.owner == caller, Errors::UNAUTHORIZED);
             let cargo = Cargo {
                 id: cargo.id,
                 weight: weight,
                 size: size,
                 destination: destination,
+                origin: origin,
                 owner: caller,
                 status: status,
                 };
@@ -106,23 +124,24 @@ mod CargoListing {
 
         // this function will remove the cargo from the list 
         // we do not actually remove the cargo from the list, we just change the status to unavailable
-        fn remove_cargo(ref self : ContractState, listing_id: u32) -> String {
+        fn remove_cargo(ref self : ContractState, listing_id: u32) {
             let caller = get_caller_address();
             let cargo = self.cargo_listing.read(listing_id);
-            if cargo.owner!= caller {
-                return;
-            }
+            // if cargo.owner!= caller {
+            //     return;
+            // }
+            assert(cargo.owner == caller, Errors::UNAUTHORIZED);
             // change cargo avalability to unavailable
             let cargo = Cargo {
                 id: cargo.id,
                 weight: cargo.weight,
                 size: cargo.size,
                 destination: cargo.destination,
+                origin: cargo.origin,
                 owner: caller,
                 status: CargoStatus::Unavailable,
             };
             self.cargo_listing.write(cargo.id, cargo);
-            return "Cargo removed successfully!".to_string();
         }
 
         // this function will transfer the ownership of the cargo to the new owner
@@ -131,28 +150,25 @@ mod CargoListing {
         fn transfer_cargo_ownership(ref self : ContractState, listing_id: u32, new_owner: ContractAddress) {
             let caller = get_caller_address();
             let cargo = self.cargo_listing.read(listing_id);
-            // check if the caller is the new owner
-            if cargo.owner!= caller {
-                return "Operation not allowed. Illegal!".to_string();
-            }
+
+            assert(caller == new_owner, Errors::UNAUTHORIZED);
             // change the owner of the cargo to the new owner
             let cargo = Cargo {
                 id: cargo.id,
                 weight: cargo.weight,
                 size: cargo.size,
                 destination: cargo.destination,
+                origin: cargo.origin,
                 owner: new_owner,
                 status: cargo.status,
             };
             self.cargo_listing.write(cargo.id, cargo);
         }
-    }
 
-    #[generate_trait]
-    impl PrivateMethods of PrivateMethodsTrait {
-        fn only_owner(self: @ContractState) {
-            let caller = get_caller_address();
-            assert(caller == self.owner.read(), 'Caller is not the owner');
+        // this function will return the owner of the cargo
+        fn get_cargo_owner(self : @ContractState, listing_id: u32) -> ContractAddress {
+            let cargo = self.cargo_listing.read(listing_id);
+            return cargo.owner;
         }
     }
 }
