@@ -10,13 +10,7 @@ trait ICargoListing<TContractState> {
     fn transfer_cargo_ownership(ref self : TContractState, listing_id: u32, new_owner: ContractAddress);
     fn get_cargo_owner(self : @TContractState, listing_id: u32) -> ContractAddress;
     fn get_owner(self : @TContractState) -> ContractAddress;
-    // fn get_cargo_count(self : @TContractState) -> u32;
-    // fn get_cargo_list(self : @TContractState, start: u32, end: u32) -> Vec<Cargo>;
-    // fn get_cargo_list_by_owner(self : @TContractState, owner: ContractAddress, start: u32, end: u32) -> Vec<Cargo>;
-    // fn get_cargo_list_by_status(self : @TContractState, status: CargoStatus, start: u32, end: u32) -> Vec<Cargo>;
-    // fn get_cargo_list_by_origin(self : @TContractState, origin: Location, start: u32, end: u32) -> Vec<Cargo>;
-    // fn get_cargo_list_by_destination(self : @TContractState, destination: Location, start: u32, end: u32) -> Vec<Cargo>;
-    // fn get_cargo_list_by_origin_and_destination(self : @TContractState, origin: Location, destination: Location, start: u32, end: u32) -> Vec<Cargo>;
+    fn get_cargo_list(self : @TContractState) -> LegacyMap<u32, Cargo>;
     }
 
 // this is the Cargo struct that will be stored in the contract
@@ -169,6 +163,17 @@ mod CargoListing {
         fn get_cargo_owner(self : @ContractState, listing_id: u32) -> ContractAddress {
             let cargo = self.cargo_listing.read(listing_id);
             return cargo.owner;
+        }
+
+        // this method will return list of all available cargo
+        fn get_available_cargo(self : @ContractState) -> LegacyMap<u32, Cargo> {
+            let mut available_cargo = LegacyMap::new();
+            for (listing_id, cargo) in self.cargo_listing.iter() {
+                if cargo.status == CargoStatus::Available {
+                    available_cargo.write(listing_id, cargo);
+                }
+            }
+            return available_cargo;
         }
     }
 }
