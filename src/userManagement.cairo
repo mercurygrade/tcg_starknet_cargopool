@@ -1,57 +1,51 @@
-use starknet:: {
-    ContractAddress,
-    get_caller_address,
-};
+use starknet::{ContractAddress, get_caller_address};
 
-//at this point User only has Address, depending on scope, this might be expanded
-struct User {
-    address: ContractAddress,
+#[starknet::interface]
+trait IUserManagementContract<TContractState> {
+    fn register_user(ref self: TContractState);
+    fn authenticate_user(ref self: TContractState);
+    fn get_user_profile(self: @TContractState, user_address: ContractAddress) -> User;
 }
 
-//implement storage
 #[starknet::contract]
-struct UserManagement;
+mod UserManagementContract {
+    use starknet::LegacyMap;
+    use super::{IUserManagementContract, ContractAddress};
 
+    #[derive(Clone, Copy)]
+    struct User {
+        address: ContractAddress,
+    }
 
-impl UserManagement {
-    //user registration using only using get caller address
-    fn register_user() {
-        let user_address = get_caller_address();
+    #[storage]
+    struct Storage {
+        users: LegacyMap<ContractAddress, User>,
+    }
 
-        assert!(!UserManagement::is_user_registered(user_address), "User already registered");
+    #[external(v0)]
+    impl UserManagementImpl of IUserManagementContract<ContractState> {
+        fn register_user(ref self: ContractState) {
+            let user_address = get_caller_address();
 
-        let new_user = User {
-            address: user_address,
+            assert(!self.users.contains(user_address), "User already registered");
+
+            let new_user = User {
+                address: user_address,
+            };
+
+            self.users.write(user_address, new_user);
         }
 
-        ContractState::load::<UserManagement>().save_user_profile(user_address, new_user);
-    }
-    
-    //authenticate user using caller address
-    fn authenticate_user() {
-        let user_address = get_caller_address();
-        assert!(UserManagement::is_user_registered(user_address), "User not registered");
-    }
+        fn authenticate_user(ref self: ContractState) {
+            let user_address = get_caller_address();
+            assert(self.users.contains(user_address), "User not registered");
+        }
 
-    //get user profile using caller address if the user profile is expanded later on
-    fn get_user_profile(user_address: ContractAddress) -> User {
-        assert!(UserManagement::is_user_authorized(get_caller_address(), user_address), "Unauthorized");
+        fn get_user_profile(self: @ContractState, user_address: ContractAddress) -> User {
+            let caller_address = get_caller_address();
+            assert(caller_address == user_address, "Unauthorized");
 
-        ContractState::load::<UserManagement>().get_user_profile(user_address)
-    }
-
-    //helper function to check if a user is registered
-    fn is_user_registered(user_address: ContractAddress) -> bool {
-        ContractState::load::<UserManagement>().is_user_registered(user_address)
-    }
-
-    //helper function  to check if user is authorized
-    fn is_user_authorized(caller_address: ContractAddress, target_user_address: ContractAddress) -> bool {
-        caller_address == target_user_address
-    }
-
-    //helper function to save user profile
-    fn save_user_profile(user_address: ContractAddress, user: User) {
-        ContractState::load::<UserManagement>().save_user_profile(user_address, user);
+            self.users.read(user_address)
+        }
     }
 }

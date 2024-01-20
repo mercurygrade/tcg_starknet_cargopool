@@ -1,143 +1,251 @@
-//Import Contract Address from starknet because we are using contract address to identify the owner of the request
+//  this module is working as expected
+
 use starknet::ContractAddress;
 
-//Implementation of the interface
+// this is the interface that will be used in the contract
 #[starknet::interface]
+trait ICargoListing<TContractState> {
+    fn get_cargo(self : @TContractState, listing_id: u32) -> Cargo;
+    fn add_cargo(ref self : TContractState, weight: u32, size: u32, destination: Location, origin: Location);
+    fn update_cargo(ref self : TContractState, listing_id: u32, weight: u32, size: u32, destination: Location, origin: Location, status: CargoStatus);
+    fn remove_cargo(ref self : TContractState, listing_id: u32);
+    fn transfer_cargo_ownership(ref self : TContractState, listing_id: u32);
+    fn get_cargo_list(self : @TContractState) -> Array<Cargo>;
+    fn filter_cargo_by_size(self: @TContractState, driver_preference: Preference) -> Array<Cargo>;
+    fn filter_cargo_by_weight(self: @TContractState, driver_preference: Preference,  cargo_list: Array<Cargo>) -> Array<Cargo>;
+    fn get_cargo_count(self: @TContractState) -> u32;
+    }
 
-//according to the requirements we are supposed to have the functionalities add_cargo, update_cargo, remove_cargo
-//transfer_ownership and get_owner were added so as to help implement the other functions
-//remove_cargo should just change status to unavailable rather than deleting it because it is not recommended to delete such info in enterprise apps.
-//as of today I was unable to implement that (did not find a way in Cairo) 
-//transfer_ownership is added so that the owner of the contract can transfer the ownership to another address
-//cargo_status should implemented in detail here because it is being used in 3 other places
+// this is the Cargo struct that will be stored in the contract
+#[derive(Drop, Serde, Copy, starknet::Store)]
+struct Cargo {
+    id: u32,
+    weight: u32,
+    size: u32,
+    destination: Location,
+    origin:Location,
+    owner: ContractAddress,
+    status: CargoStatus,
+    }
 
-trait CargoListingTrait<T> {
-    fn add_cargo(ref self: TContractState, destination: felt252, size: u128, weight: u128);
-    fn update_cargo(ref self: TContractState, cargo_id: u128, destination: felt252, size: u128, weight: u128);
-    fn remove_cargo(ref self: TContractState, cargo_id: u128);
-    fn transfer_ownership(ref self: T, new_owner: ContractAddress);
-    fn get_owner(self: @T) -> ContractAddress;
+#[derive(Drop, Serde, Copy, starknet::Store)]
+struct Preference {
+    size: u32,
+    weight: u32,
+    proximity: u32,
+    }
+
+// this is the Location struct that will be used in the contract
+#[derive(Drop, Serde, Copy, starknet::Store)]
+struct Location {
+    latitude: felt252,
+    longitude: felt252,
 }
-//Implementation of the contract
-#[starknet::contract]
-mod CargoListing {
-    //import ContractAddress from parent
-    use super::ContractAddress;
-    //get_caller_address is an inbuilt function
-    use starknet::get_caller_address;
 
-    //I added this as part of debugging the error 'Event defined multiple times'
-    //The error was not affected by this. It kept on happening
-    #[event]
 
-    //This is the function to implement ownership transfer
-    //this function works, can be removed if the developer decides there is no use for trnasfer
-    #[derive(Drop, starknet::Event)]
-    enum Event {
-      OwnershipTransferred1: OwnershipTransferred1,
-    }
-
-    //This transfers ownership using contactAddress of existing user as prev_owner and new_owner as transferee
-    #[derive(Drop, starknet::Event)]
-    struct OwnershipTransferred1 {
-        #[key]
-        prev_owner: ContractAddress,
-        #[key]
-        new_owner: ContractAddress,
-    }
-    
-    //This is the storage function I chose because Storage should be implemented in each contract (Cairo requires)
-    //This simply stores id of the next cargo, cargo_map(this should be imported it is part of Legacy Cairo, i run into multiple errors importing it), and owner.
-
-    #[storage]
-    struct Storage {
-        next_cargo_id: u64,
-        cargo_map: u64,
-        owner: ContractAddress,
-    }
-
-    //This is the main storage for the Cargo. It is supposed to have id, business_owner, destination, size, weight, CargoStatus. 
-    //Additionally a source might be added depending on the Map implementation.
-    #[storage]
-    struct Cargo {
-        id: u64,
-        business_owner: ContractAddress,
-        destination: felt252,
-        size: u64,
-        weight: u64,
-        status: CargoStatus,
-    }
-
-    //This is the enum for the status of the cargo. It is supposed to have Available, InTransit, Matched, Unavailable, Delivered.
-    //Unavailable can be added here as well to implement remove_cargo as changing status to unavailable
-    //This would render the remove function redundant and might improve efficiency (depends on how developer implements it) so
-    enum CargoStatus {
+#[derive(Drop, Serde,Copy, starknet::Store)]
+enum CargoStatus {
         Available,
-        Matched
+        Matched,
         InTransit,
         Unavailable,
         Delivered,
     }
 
-    //This is the main contract state. It is supposed to have next_cargo_id and cargo_map.
-    struct CargoListing {
-        next_cargo_id: u64,
-        cargo_map: u64,
+mod Errors {
+    const UNAUTHORIZED: felt252 = 'Not owner';
+    const ZERO_ADDRESS_OWNER: felt252 = 'Owner cannot be zero';
+    const ZERO_ADDRESS_CALLER: felt252 = 'Caller cannot be zero';
+}
+
+
+// this is the implementation of the interface
+#[starknet::contract]
+mod CargoListing {
+    use core::clone::Clone;
+use core::traits::TryInto;
+use core::traits::Into;
+    use starknet::ContractAddress;
+    use starknet::get_caller_address;
+    use super::Cargo;
+    use super::Location;
+    use super::CargoStatus;
+    use super::Preference;
+    use super::Errors;
+
+
+    #[storage]
+    struct Storage {
+        next_cargo_id: u32,
+        cargo_count: u32,
+        cargo_listing: LegacyMap<u32, Cargo>,
     }
 
-    //This is the constructor. It is supposed to view the next Cargo.
     #[constructor]
-    fn constructor(ref self:ContractState){
-        self.next_cargo_id.write(1);
+    fn constructor(ref self : ContractState) {
+        self.next_cargo_id.write(0);
+        self.cargo_count.write(0);
     }
 
-    //This part holds the implementation of the functions
     #[abi(embed_v0)]
-    impl CargoListingImpl of CargoListingTrait<ContractState>{
+    impl CargoListingImpl of super::ICargoListing<ContractState>{      
+        
+        // this function will get the cargo from the list
+        fn get_cargo(self : @ContractState, listing_id: u32) -> Cargo {
+           return self.cargo_listing.read(listing_id);
+        }
 
-        //destination was set to felt252 because of recommendation of Cairo (remember it only supports 31 characters so destructure it 
-        // if destination can be set to more than that)
-        fn add_cargo(ref self: ContractState, destination: felt252, size: u64, weight: u64){
-            // this implementation is straight forward: get id of the last cargo -> give the new cargo an ID of id_of_last_cargo + 1 -> get business_owner
-            // populate the remaining features of the cargo
-            let cargo_id = self.next_cargo_id.read();
-            self.next_cargo_id.write(cargo_id + 1);
+        // this function will add a new cargo to the list
+        fn add_cargo(ref self : ContractState, weight: u32, size: u32, destination: Location, origin: Location) {
+            let caller = get_caller_address();
+            let id = self.next_cargo_id.read();
+            let cargo_count = self.cargo_count.read();
 
-            let business_owner = get_caller_address();
-            let cargo = Cargo{
-                id: cargo_id,
-                business_owner: business_owner,
-                destination: destination,
-                size: size,
+            let cargo = Cargo {
+                id: id,
                 weight: weight,
+                size: size,
+                destination: destination,
+                origin: origin,
+                owner: caller,
                 status: CargoStatus::Available,
             };
-            self.cargo_map.set(cargo_id, cargo);
+            self.cargo_listing.write(cargo.id, cargo);
+            self.next_cargo_id.write(id + 1);
+            self.cargo_count.write(cargo_count + 1);
         }
 
-        fn update_cargo(ref self: ContractState, cargo_id: u64, destination: felt252, size: u64, weight: u64){
-            //Get cargo by id -> make sure the owner is the one calling the update -> update destination, size, and weight with new values and then save
-            let cargo = self.cargo_map.get(cargo_id);
-            assert_eq!(cargo.business_owner, get_caller_address());
-            cargo.destination = destination;
-            cargo.size = size;
-            cargo.weight = weight;
+        // this function will update the cargo in the list
+        fn update_cargo(ref self : ContractState, listing_id:u32, weight: u32, size: u32, destination: Location, origin: Location, status: CargoStatus) {
+            let caller = get_caller_address();
+            let cargo = self.cargo_listing.read(listing_id);
 
-            self.cargo_map.insert(cargo_id, cargo);
+            assert(cargo.owner == caller, Errors::UNAUTHORIZED);
+            let cargo = Cargo {
+                id: cargo.id,
+                weight: weight,
+                size: size,
+                destination: destination,
+                origin: origin,
+                owner: caller,
+                status: status,
+                };
+                self.cargo_listing.write(cargo.id, cargo);
+            }
+
+        // this function will remove the cargo from the list 
+        // we do not actually remove the cargo from the list, we just change the status to unavailable
+        fn remove_cargo(ref self : ContractState, listing_id: u32) {
+            let caller: ContractAddress = get_caller_address();
+            let cargo : Cargo = self.cargo_listing.read(listing_id);
+            // if cargo.owner!= caller {
+            //     return;
+            // }
+            assert(cargo.owner == caller, Errors::UNAUTHORIZED);
+            // change cargo avalability to unavailable
+            let cargo: Cargo = Cargo {
+                id: cargo.id,
+                weight: cargo.weight,
+                size: cargo.size,
+                destination: cargo.destination,
+                origin: cargo.origin,
+                owner: caller,
+                status: CargoStatus::Unavailable,
+            };
+            self.cargo_listing.write(cargo.id, cargo);
         }
-        fn remove_cargo(ref self: ContractState, cargo_id: u64){
-            //find cargo by id -> make sure the owner is the one calling the update -> then remove
-            let cargo = self.cargo_map.get(cargo_id);
-            let cargo = self.cargo_map.get(cargo_id).expect("Cargo not found");
-            assert_eq!(cargo.business_owner, get_caller_address());
-            self.cargo_map.remove(cargo_id);
+  
+        // this function will transfer the ownership of the cargo to the new owner
+        // the caller should be the new owner
+        // this method can be usefull if we want to transfer it to another user for example on accepting delivery on driver side
+        fn transfer_cargo_ownership(ref self : ContractState, listing_id: u32) {
+            let caller = get_caller_address();
+            let cargo: Cargo = self.cargo_listing.read(listing_id);
+
+            // assert( calle, Errors::UNAUTHORIZED);
+            // change the owner of the cargo to the new owner
+            let cargo = Cargo {
+                id: cargo.id,
+                weight: cargo.weight,
+                size: cargo.size,
+                destination: cargo.destination,
+                origin: cargo.origin,
+                owner: caller,
+                status: cargo.status,
+            };
+            self.cargo_listing.write(cargo.id, cargo);
         }
 
-        fn update_cargo_status(ref self:ContractState, cargo_id: u64, new_status: CargoStatus){
-            //find cargo by id -> make sure the owner is the one calling the update -> then update
-            let mut cargo = self.cargo_map.get(cargo_id).expect("Cargo not found");
-            cargo.status = new_status;
-            self.cargo_map.insert(cargo_id, cargo)
+        fn get_cargo_list(self : @ContractState) -> Array<Cargo> {
+            let mut cargo_list: Array<Cargo> = ArrayTrait::new();
+        //  let mut i: u32 = 0;
+            let cargo_one = self.cargo_listing.read(0);
+            let cargo_two = self.cargo_listing.read(1);
+            cargo_list.append(cargo_one);
+            cargo_list.append(cargo_two);
+            return cargo_list;
+        }
+
+       // This function will filter the cargo list based on the size of the cargo. return cargos by size which are less than or equal to driver preference
+       // throws an error
+        fn filter_cargo_by_size( self: @ContractState, driver_preference: Preference) -> Array<Cargo>{
+           // get cargo list
+        let mut cargo_size = self.cargo_count.read();
+        let mut driver_preference_size = driver_preference.size;
+   
+        let mut sorted_cargo_list : Array<Cargo> = ArrayTrait::new();
+    
+        let mut i: u32 = 0;
+
+            // Loop through the entire cargo list
+            loop {
+                if i == cargo_size {
+                    break;
+                }
+                // Get the cargo size
+                let mut cargo: Cargo = self.cargo_listing.read(i);
+                let mut size = cargo.size;
+
+                if size <= driver_preference_size {
+                    sorted_cargo_list.append(cargo);
+                 }
+                i = i + 1;
+            };
+            return sorted_cargo_list;
+        }
+
+        // this function will filter the cargo list based on the weight of the cargo. return cargos by weight which are less than or equal to driver preference
+        fn filter_cargo_by_weight(self : @ContractState, driver_preference: Preference,  cargo_list: Array<Cargo>) -> Array<Cargo>{
+            
+            let mut cargos = cargo_list;
+            // get cargos size
+            let mut cargo_size: u32 = cargos.len();
+            // get the drivers preference weight
+            let mut driver_preference_weight = driver_preference.weight;
+
+            // create a new cargo list
+            let mut sorted_cargo_list_by_weight : Array<Cargo> = ArrayTrait::new();
+
+            let mut i: u32 = 0;
+
+            loop {
+                if i == cargo_size {
+                    break;
+                }
+                // Get the cargo weight
+                let mut cargo : Cargo = cargos.at(i).clone();
+                let mut weight = cargo.weight;
+
+                if weight <= driver_preference_weight {
+                    sorted_cargo_list_by_weight.append(cargo);
+                }
+            };
+            return sorted_cargo_list_by_weight;    
+        }
+
+        // return cargo count 
+        fn get_cargo_count(self : @ContractState) -> u32 {
+            return self.cargo_count.read();
         }
     }
 }
