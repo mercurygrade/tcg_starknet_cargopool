@@ -62,7 +62,9 @@ mod Errors {
 // this is the implementation of the interface
 #[starknet::contract]
 mod CargoListing {
-    use core::traits::Into;
+    use core::clone::Clone;
+use core::traits::TryInto;
+use core::traits::Into;
     use starknet::ContractAddress;
     use starknet::get_caller_address;
     use super::Cargo;
@@ -204,8 +206,6 @@ mod CargoListing {
                 let mut cargo: Cargo = self.cargo_listing.read(i);
                 let mut size = cargo.size;
 
-                assert(i > 2, 'i must be greater than 0');
-
                 if size <= driver_preference_size {
                     sorted_cargo_list.append(cargo);
                  }
@@ -233,7 +233,7 @@ mod CargoListing {
                     break;
                 }
                 // Get the cargo weight
-                let mut cargo : Cargo = cargos.at(i);
+                let mut cargo : Cargo = cargos.at(i).clone();
                 let mut weight = cargo.weight;
 
                 if weight <= driver_preference_weight {
